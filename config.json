@@ -1,0 +1,243 @@
+{
+  "playbook_metadata": {
+    "name": "Network Interface Renaming Playbook",
+    "version": "1.0.0",
+    "description": "Remediates network inhibitor issues for RHEL 7 to 8 upgrades by renaming network interfaces",
+    "author": "RHEL Upgrade Automation Team",
+    "last_updated": "2025-11-08"
+  },
+  "default_variables": {
+    "src_prefix": "eth",
+    "dst_prefix": "en",
+    "osnet_conf": "/etc/os-net-config/config.json",
+    "undercloud_conf": "~/undercloud.conf"
+  },
+  "configuration": {
+    "target_systems": {
+      "supported_os": [
+        "RedHat Enterprise Linux 7",
+        "CentOS 7",
+        "RedHat Enterprise Linux 8",
+        "CentOS 8"
+      ],
+      "minimum_ansible_version": "2.9",
+      "required_privileges": "root or sudo"
+    },
+    "interface_naming": {
+      "source_pattern": "eth*",
+      "destination_pattern": "en*",
+      "exclude_patterns": ["eth*.vlan", "*.bak", "*.rpmsave", "*.rpmnew"],
+      "preserve_vlan_interfaces": true
+    },
+    "backup_settings": {
+      "enabled": true,
+      "backup_extension": ".bak",
+      "backup_location": "same_directory",
+      "auto_cleanup": false
+    },
+    "paths": {
+      "network_scripts_dir": "/etc/sysconfig/network-scripts",
+      "udev_rules_dir": "/etc/udev/rules.d",
+      "udev_rules_file": "70-rhosp-persistent-net.rules",
+      "ifcfg_pattern": "ifcfg-*",
+      "route_pattern": "route-*"
+    },
+    "tags": {
+      "udev": {
+        "description": "Update udev persistent network rules with MAC addresses",
+        "tasks": ["Update udev rules"]
+      },
+      "ifcfg": {
+        "description": "Rename and update network interface configuration files",
+        "tasks": [
+          "Check that src_prefix files exists",
+          "Copy ifcfg files using dst_prefix",
+          "Edit NAME in new network-script files",
+          "Edit DEVICE in new network-script files",
+          "Backup old ifcfg network-script files",
+          "Remove old ifcfg network-script files",
+          "Perform a final regex for any remaining src_prefix"
+        ]
+      },
+      "routes": {
+        "description": "Rename and update route configuration files",
+        "tasks": [
+          "Check that route files exists",
+          "Copy route files using dst_prefix",
+          "Update dst_prefix in route files",
+          "Backup old route files",
+          "Remove old route files"
+        ]
+      },
+      "tripleo": {
+        "description": "Update OpenStack TripleO specific configurations",
+        "tasks": [
+          "Check if undercloud.conf exists",
+          "Replace interface name in undercloud.conf",
+          "Check if os-net-config's config.json exists",
+          "Replace interface name in config.json"
+        ]
+      }
+    },
+    "openstack_integration": {
+      "enabled": true,
+      "tripleo_support": true,
+      "undercloud_config_update": true,
+      "osnet_config_update": true,
+      "check_file_existence": true
+    },
+    "execution_options": {
+      "gather_facts": true,
+      "become_required": true,
+      "serial_execution": false,
+      "check_mode_supported": true,
+      "diff_mode_supported": true
+    },
+    "safety_features": {
+      "create_backups": true,
+      "validate_before_delete": true,
+      "check_file_existence": true,
+      "preserve_permissions": true,
+      "remote_src_copy": true
+    }
+  },
+  "examples": {
+    "basic_usage": [
+      {
+        "description": "Run against localhost",
+        "command": "ansible-playbook -i localhost, -c local interface_update.yml"
+      },
+      {
+        "description": "Run against remote hosts",
+        "command": "ansible-playbook -i inventory.ini interface_update.yml"
+      },
+      {
+        "description": "Run with custom prefixes",
+        "command": "ansible-playbook -i inventory.ini interface_update.yml -e 'src_prefix=eth dst_prefix=ens'"
+      }
+    ],
+    "tag_based_execution": [
+      {
+        "description": "Only update udev rules",
+        "command": "ansible-playbook -i inventory.ini interface_update.yml --tags udev"
+      },
+      {
+        "description": "Update interface configs and routes",
+        "command": "ansible-playbook -i inventory.ini interface_update.yml --tags ifcfg,routes"
+      },
+      {
+        "description": "Skip TripleO configurations",
+        "command": "ansible-playbook -i inventory.ini interface_update.yml --skip-tags tripleo"
+      }
+    ],
+    "advanced_usage": [
+      {
+        "description": "Check mode (dry run)",
+        "command": "ansible-playbook -i inventory.ini interface_update.yml --check --diff"
+      },
+      {
+        "description": "Verbose output",
+        "command": "ansible-playbook -i inventory.ini interface_update.yml -vvv"
+      },
+      {
+        "description": "Limit to specific hosts",
+        "command": "ansible-playbook -i inventory.ini interface_update.yml --limit server1.example.com"
+      }
+    ]
+  },
+  "file_operations": {
+    "interface_configs": {
+      "source_pattern": "ifcfg-eth*",
+      "destination_pattern": "ifcfg-en*",
+      "parameters_to_update": ["NAME", "DEVICE"],
+      "backup_before_delete": true
+    },
+    "route_configs": {
+      "source_pattern": "route-eth*",
+      "destination_pattern": "route-en*",
+      "update_content": true,
+      "backup_before_delete": true
+    },
+    "udev_rules": {
+      "file": "/etc/udev/rules.d/70-rhosp-persistent-net.rules",
+      "subsystem": "net",
+      "action": "add",
+      "use_mac_address": true,
+      "use_permanent_mac": true
+    }
+  },
+  "post_execution": {
+    "required_actions": [
+      {
+        "step": 1,
+        "action": "Verify configuration files",
+        "commands": [
+          "ls -la /etc/sysconfig/network-scripts/ifcfg-en*",
+          "cat /etc/udev/rules.d/70-rhosp-persistent-net.rules"
+        ]
+      },
+      {
+        "step": 2,
+        "action": "Reboot system",
+        "commands": ["systemctl reboot"],
+        "warning": "Ensure console access is available before rebooting"
+      },
+      {
+        "step": 3,
+        "action": "Post-reboot verification",
+        "commands": [
+          "ip link show",
+          "nmcli device status",
+          "ping -c 4 8.8.8.8",
+          "ip route show"
+        ]
+      }
+    ],
+    "rollback_procedure": {
+      "enabled": true,
+      "backup_files_pattern": "*.bak",
+      "steps": [
+        "Boot into rescue mode if needed",
+        "Restore .bak files to original names",
+        "Remove new interface configuration files",
+        "Remove udev rules file",
+        "Reboot system"
+      ]
+    }
+  },
+  "troubleshooting": {
+    "common_issues": [
+      {
+        "issue": "Interfaces not renamed after reboot",
+        "solution": "Regenerate initramfs with: dracut -f && reboot"
+      },
+      {
+        "issue": "Network not coming up after reboot",
+        "solution": "Check nmcli device status and manually bring up interface"
+      },
+      {
+        "issue": "SSH access lost after reboot",
+        "solution": "Use console access to verify NetworkManager and interface configuration"
+      }
+    ]
+  },
+  "integration": {
+    "rhel_upgrade_workflow": {
+      "sequence": [
+        "1. Run interface_update.yml playbook",
+        "2. Reboot and verify network functionality",
+        "3. Run leapp preupgrade",
+        "4. Review preupgrade report",
+        "5. Run leapp upgrade",
+        "6. Reboot into RHEL 8"
+      ]
+    }
+  },
+  "references": {
+    "documentation": [
+      "https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/8/html/configuring_and_managing_networking/",
+      "https://www.freedesktop.org/wiki/Software/systemd/PredictableNetworkInterfaceNames/",
+      "https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/8/html/upgrading_from_rhel_7_to_rhel_8/"
+    ]
+  }
+}
